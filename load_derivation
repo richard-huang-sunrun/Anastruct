@@ -1,0 +1,138 @@
+def derive_load_cases(
+    nonPV_DL, nonPV_LL, PV_DL,
+    snow, wind_pressures,
+    member_spacing, pitch,
+    nonPV_elements, PV_elements
+):
+    """
+    Derive all load values, create LoadCase objects, and return:
+      1. a list of tuples: (load_combination_name, [LoadCase_instances])
+      2. IEBC-check dictionary
+    """
+
+    # 1) Assign snow values
+    PV_snow = snow[0]
+    nonPV_snow = snow[1]
+
+    # 2) IEBC “pre/post PV” checks (returned separately below)
+    IEBC_nonPV_DL = nonPV_DL
+    IEBC_nonPV_DL_LL = nonPV_DL + nonPV_LL
+    IEBC_nonPV_DL_S = nonPV_DL + nonPV_snow
+    IEBC_nonPV_DL_075LL_075S = nonPV_DL + (0.75 * nonPV_LL) + (0.75 * nonPV_snow)
+    IEBC_PV_DL = PV_DL
+    IEBC_PV_DL_S = PV_DL + PV_snow
+
+    # 3) Convert to psf (47.8802589) and then to uniform load times spacing
+    factor = 47.880258888889
+    nonPV_DL *= factor
+    nonPV_LL *= factor
+    PV_DL *= factor
+    nonPV_snow *= factor
+    PV_snow *= factor
+    wind_load = wind_pressures[0] * factor
+    wind_up = wind_pressures[1] * factor
+
+    nonPV_DL *= member_spacing
+    nonPV_LL *= member_spacing
+    PV_DL *= member_spacing
+    nonPV_snow *= member_spacing
+    PV_snow *= member_spacing
+    wind_load *= member_spacing
+    wind_up *= member_spacing
+
+    # 4) Adjust for pitch (cos, cos²)
+    cos_pitch = np.cos(pitch)
+    nonPV_DL *= cos_pitch
+    nonPV_LL *= cos_pitch * cos_pitch
+    PV_DL *= cos_pitch
+    nonPV_snow *= cos_pitch * cos_pitch
+    PV_snow *= cos_pitch * cos_pitch
+
+    # 5) Derive intermediate “combinations” for caching
+    nonPV_DL_06 = nonPV_DL * 0.6
+    PV_DL_06 = PV_DL * 0.6
+    nonPV_LL_075 = nonPV_LL * 0.75
+    nonPV_snow_075 = nonPV_snow * 0.75
+    PV_snow_075 = PV_snow * 0.75
+    wind_045 = wind_load * 0.45
+
+    # 6) Create each LoadCase
+    lc_DL_nonPV = LoadCase("DL_nonPV")
+    lc_DL_nonPV.q_load(q=-(nonPV_DL), element_id=nonPV_elements, direction="element")
+
+    lc_DL_PV = LoadCase("DL_PV")
+    lc_DL_PV.q_load(q=-(PV_DL), element_id=PV_elements, direction="element")
+
+    lc_DL_LL_nonPV = LoadCase("DL_LL_nonPV")
+    lc_DL_LL_nonPV.q_load(q=-(nonPV_DL + nonPV_LL), element_id=nonPV_elements, direction="element")
+
+    lc_DL_LL_PV = LoadCase("DL_LL_PV")
+    lc_DL_LL_PV.q_load(q=-(PV_DL), element_id=PV_elements, direction="element")
+
+    lc_DL_LL_075_wind_045_live_075_nonPV = LoadCase("DL_LL_075_wind_045_live_075_nonPV")
+    lc_DL_LL_075_wind_045_live_075_nonPV.q_load(
+        q=-(nonPV_DL + wind_045 + nonPV_LL_075),
+        element_id=nonPV_elements,
+        direction="element"
+    )
+
+    lc_DL_LL_075_wind_045_live_075_PV = LoadCase("DL_LL_075_wind_045_live_075_PV")
+    lc_DL_LL_075_wind_045_live_075_PV.q_load(
+        q=-(PV_DL + wind_045),
+        element_id=PV_elements,
+        direction="element"
+    )
+
+    lc_DL_snow_nonPV = LoadCase("DL_snow_nonPV")
+    lc_DL_snow_nonPV.q_load(q=-(nonPV_DL + nonPV_snow), element_id=nonPV_elements, direction="element")
+
+    lc_DL_snow_PV = LoadCase("DL_snow_PV")
+    lc_DL_snow_PV.q_load(q=-(PV_DL + PV_snow), element_id=PV_elements, direction="element")
+
+    lc_DL_LL_075_wind_045_snow_075_nonPV = LoadCase("DL_LL_075_wind_045_snow_075_nonPV")
+    lc_DL_LL_075_wind_045_snow_075_nonPV.q_load(
+        q=-(nonPV_DL + wind_045 + nonPV_snow_075),
+        element_id=nonPV_elements,
+        direction="element"
+    )
+
+    lc_DL_LL_075_wind_045_snow_075_PV = LoadCase("DL_LL_075_wind_045_snow_075_PV")
+    lc_DL_LL_075_wind_045_snow_075_PV.q_load(
+        q=-(PV_DL + wind_045 + PV_snow_075),
+        element_id=PV_elements,
+        direction="element"
+    )
+
+    lc_DL_06_wind_06_nonPV = LoadCase("DL_06_wind_06_nonPV")
+    lc_DL_06_wind_06_nonPV.q_load(q=-(nonPV_DL_06 + wind_up), element_id=nonPV_elements, direction="element")
+
+    lc_DL_06_wind_06_PV = LoadCase("DL_06_wind_06_PV")
+    lc_DL_06_wind_06_PV.q_load(q=-(PV_DL_06 + wind_up), element_id=PV_elements, direction="element")
+
+    lc_DL_wind_06_nonPV = LoadCase("DL_wind_06_nonPV")
+    lc_DL_wind_06_nonPV.q_load(q=-(nonPV_DL + wind_up * 0), element_id=nonPV_elements, direction="element")  # same as D + 0.6W down?
+
+    lc_DL_wind_06_PV = LoadCase("DL_wind_06_PV")
+    lc_DL_wind_06_PV.q_load(q=-(PV_DL + wind_up * 0), element_id=PV_elements, direction="element")
+
+    # 7) Group into named combinations
+    load_combinations = [
+        ("D", [lc_DL_nonPV, lc_DL_PV]),
+        ("D + Lr", [lc_DL_LL_nonPV, lc_DL_LL_PV]),
+        ("D + 0.75(Lr + 0.6W)", [lc_DL_LL_075_wind_045_live_075_nonPV, lc_DL_LL_075_wind_045_live_075_PV]),
+        ("D + S", [lc_DL_snow_nonPV, lc_DL_snow_PV]),
+        ("D + 0.75(S + 0.6W)", [lc_DL_LL_075_wind_045_snow_075_nonPV, lc_DL_LL_075_wind_045_snow_075_PV]),
+        ("0.6D + 0.6W (Up)", [lc_DL_06_wind_06_nonPV, lc_DL_06_wind_06_PV]),
+        ("D + 0.6W (Down)", [lc_DL_wind_06_nonPV, lc_DL_wind_06_PV])
+    ]
+
+    IEBC_check = {
+        "Pre-PV D": IEBC_nonPV_DL,
+        "Pre-PV D + L": IEBC_nonPV_DL_LL,
+        "Pre-PV D + S": IEBC_nonPV_DL_S,
+        "Pre-PV D + 0.75Lr + 0.75S": IEBC_nonPV_DL_075LL_075S,
+        "Post-PV D": IEBC_PV_DL,
+        "Post-PV D + S": IEBC_PV_DL_S
+    }
+
+    return load_combinations, IEBC_check
