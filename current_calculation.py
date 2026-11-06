@@ -8,6 +8,9 @@ import numpy as np
 
 import math
 
+from tji_properties import apply_tji_to_roof_inputs
+from seismic_calc import calculate_seismic_effects
+
 
 app = Flask(__name__)
 
@@ -46,7 +49,8 @@ GRADE = "#2"
 # Cr = 1.15
 
 
-def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin, Fb, Fv, G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W):
+def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin, Fb, Fv, G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W,
+                       capacity_I_in4=None, capacity_S_in3=None):
 
     """
 
@@ -271,6 +275,14 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
 
     A = breadth * depth  # Cross-sectional area
 
+    if capacity_I_in4 is not None and capacity_S_in3 is not None:
+
+        I = float(capacity_I_in4)
+
+        S = float(capacity_S_in3)
+
+        print(f"TJI section: using table I={I} in^4, S={S} in^3; A={A} in^2 (breadth x depth)")
+
     print(f"S (section modulus): {S}, I (moment of inertia): {I}, A (cross-sectional area): {A}")
 
 
@@ -312,13 +324,15 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
 
     # Calculate maximum shear force (V) for different load duration factors
 
-    V_allowable_D = (2 / 3) * breadth * Fv_prime_D * depth
+    # Rectangular beam: V = (2/3) Fv' b d = (2/3) Fv' A for solid section
 
-    V_allowable_Lr = (2 / 3) * breadth * Fv_prime_Lr * depth
+    V_allowable_D = (2 / 3) * A * Fv_prime_D
 
-    V_allowable_S = (2 / 3) * breadth * Fv_prime_S * depth
+    V_allowable_Lr = (2 / 3) * A * Fv_prime_Lr
 
-    V_allowable_W = (2 / 3) * breadth * Fv_prime_W * depth
+    V_allowable_S = (2 / 3) * A * Fv_prime_S
+
+    V_allowable_W = (2 / 3) * A * Fv_prime_W
 
     print(f"V_allowable_D: {V_allowable_D}, V_allowable_Lr: {V_allowable_Lr}, V_allowable_S: {V_allowable_S}, V_allowable_W: {V_allowable_W}")
 
@@ -433,16 +447,253 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
 
 
 
+def _truthy_slippery(val):
+
+    """Parse DETDB slippery surface: Yes/True/1 -> True, No/False/0 -> False."""
+
+    if val is None:
+
+        return None
+
+    s = str(val).strip().lower()
+
+    if s in ("yes", "y", "true", "1", "slippery"):
+
+        return True
+
+    if s in ("no", "n", "false", "0", "non-slippery", "nonslippery"):
+
+        return False
+
+    return None
+
+
+def _roof_index_from_payload(roof_entry, roofs_list):
+
+    """Resolve RX/RY index from dict {index: n} or {'id': 'roof_1'} style."""
+
+    if "index" in roof_entry:
+
+        try:
+
+            return int(roof_entry["index"])
+
+        except (TypeError, ValueError):
+
+            return None
+
+    rid = roof_entry.get("id") or roof_entry.get("roof_id")
+
+    if rid is None:
+
+        return None
+
+    for i, r in enumerate(roofs_list):
+
+        if r.get("id") == rid or r.get("roof_id") == rid:
+
+            return i
+
+    return None
+
+
+def apply_slippery_surface_snow_balance(snow_post, snow_pre, slippery_flag):
+
+    """
+
+    If slippery surface is No, PV snow uses the same balanced load as non-PV zone.
+
+    DETDB supplies slippery_surface (Yes/No).
+
+    """
+
+    meta = {"slippery_surface": slippery_flag, "adjusted": False}
+
+    tri = _truthy_slippery(slippery_flag)
+
+    if tri is False:
+
+        meta["adjusted"] = True
+
+        return snow_pre, snow_pre, meta
+
+    return snow_post, snow_pre, meta
+
+
+def compute_sliding_snow_p_add(rx, ry, Pf_psf):
+
+    """
+
+    Snow sliding from upper roof RX onto lower roof RY (ASCE-style surcharge strip).
+
+    Wx = (eave-to-ridge RX, ft) * cos(pitch_rx); Wy = (eave-to-ridge RY, ft) * cos(pitch_ry)
+
+    P_sliding = 0.4 * Pf * Wx  (Pf = flat/balanced snow psf on RX)
+
+    P_add = P_sliding / min(Wy, 15)
+
+    """
+
+    sliding = rx.get("sliding_snow") if rx.get("sliding_snow") is not None else rx.get("Sliding_Snow")
+
+    if sliding is None or str(sliding).strip() == "":
+
+        return None
+
+    s = str(sliding).strip().lower()
+
+    if s not in ("true", "1", "yes", "y"):
+
+        return None
+
+    try:
+
+        etor_rx_ft = float(rx.get("etor", 0))
+
+        etor_ry_ft = float(ry.get("etor", 0))
+
+        pitch_rx_deg = float(rx.get("pitch", 0))
+
+        pitch_ry_deg = float(ry.get("pitch", 0))
+
+    except (TypeError, ValueError):
+
+        return None
+
+    prx = math.radians(pitch_rx_deg)
+
+    pry = math.radians(pitch_ry_deg)
+
+    Wx = etor_rx_ft * math.cos(prx)
+
+    Wy = etor_ry_ft * math.cos(pry)
+
+    if Wx <= 0 or Wy <= 0 or Pf_psf <= 0:
+
+        return None
+
+    P_sliding = 0.4 * Pf_psf * Wx
+
+    denom = Wy if Wy < 15.0 else 15.0
+
+    P_add = P_sliding / denom
+
+    return {
+
+        "P_sliding_lb_per_ft_horizontal": P_sliding,
+
+        "P_add_psf": P_add,
+
+        "Wx_ft": Wx,
+
+        "Wy_ft": Wy,
+
+        "Pf_psf": Pf_psf,
+
+        "rx_id": rx.get("id", ""),
+
+        "ry_id": ry.get("id", ""),
+
+    }
+
+
+def accumulate_sliding_snow_pairs(roofs_list):
+
+    """Mutate roofs_list with P_add from sliding snow pairs."""
+
+    pairs = []
+
+    for rx in roofs_list:
+
+        raw = rx.get("sliding_snow_pairs") or rx.get("sliding_snow_pair")
+
+        if not raw:
+
+            continue
+
+        if isinstance(raw, dict):
+
+            pairs.append(raw)
+
+        elif isinstance(raw, list):
+
+            pairs.extend(raw)
+
+    for p in pairs:
+
+        if not isinstance(p, dict):
+
+            continue
+
+        i_rx = _roof_index_from_payload({"index": p.get("RX")}, roofs_list)
+
+        i_ry = _roof_index_from_payload({"index": p.get("RY")}, roofs_list)
+
+        if i_rx is None:
+
+            i_rx = _roof_index_from_payload({"id": p.get("rx") or p.get("RX_id")}, roofs_list)
+
+        if i_ry is None:
+
+            i_ry = _roof_index_from_payload({"id": p.get("ry") or p.get("RY_id")}, roofs_list)
+
+        if i_rx is None or i_ry is None:
+
+            continue
+
+        rx = roofs_list[i_rx]
+
+        ry = roofs_list[i_ry]
+
+        raw_pre = float(rx.get("_raw_snow_pre_pv", rx.get("snow_pre_pv", 0)))
+
+        raw_post = float(rx.get("_raw_snow_post_pv", rx.get("snow_post_pv", 0)))
+
+        Pf = max(raw_pre, raw_post)
+
+        detail = compute_sliding_snow_p_add(rx, ry, Pf)
+
+        if not detail:
+
+            continue
+
+        p_add = float(detail["P_add_psf"])
+
+        ry["snow_pre_pv"] = float(ry.get("snow_pre_pv", 0)) + p_add
+
+        ry["snow_post_pv"] = float(ry.get("snow_post_pv", 0)) + p_add
+
+        ry.setdefault("_sliding_snow_received", []).append(detail)
+
+
 @app.route('/', methods=['POST'])
 
 def process_roofs():
 
     data = request.get_json()
 
+    if not data:
+
+        data = {}
+
+    top_level = data
+
+    roofs_in = data.get("roofs") or []
+
+    accumulate_sliding_snow_pairs(roofs_in)
+
     outcome = []
 
 
-    for roof_data in data['roofs']:
+    for roof_data in roofs_in:
+
+        slippery_meta = {}
+
+        tji_application = {}
+
+        cap_I_in4 = None
+
+        cap_S_in3 = None
 
         # Extracting roof parameters
 
@@ -482,6 +733,41 @@ def process_roofs():
         framing_depth = float(roof_data.get('framing_depth', 3.5))
 
 
+        tji_patch = apply_tji_to_roof_inputs(roof_data, member_type=str(member_type))
+
+        if tji_patch:
+
+            modulus_E = float(tji_patch["modulus_E"])
+
+            member_A = float(tji_patch["member_A"])
+
+            member_I = float(tji_patch["member_I"])
+
+            bending_stress_Fb = float(tji_patch["bending_stress_Fb"])
+
+            shear_stress_Fv = float(tji_patch["shear_stress_Fv"])
+
+            framing_depth = float(tji_patch["framing_depth"])
+
+            list_EAI = [modulus_E, member_A, member_I]
+
+            cap_I_in4 = tji_patch.get("_capacity_I_in4")
+
+            cap_S_in3 = tji_patch.get("_capacity_S_in3")
+
+            tji_application = {
+
+                "tji_model": roof_data.get("tji_model") or roof_data.get("TJI_model"),
+
+                "tji_depth": roof_data.get("tji_depth") or roof_data.get("TJI_depth"),
+
+                "tji_name": tji_patch.get("_tji_name"),
+
+                "table_row": tji_patch.get("_tji_properties_row"),
+
+            }
+
+
         eave_to_ridge = float(roof_data.get('etor', 10))
 
         mod_locations = roof_data.get('mod_locations', [0.001, 10.001])
@@ -498,17 +784,33 @@ def process_roofs():
 
         wind_pressures = [wind_pressure_down, wind_pressure_up]
 
+        slippery_flag = roof_data.get("slippery_surface")
+
+        if slippery_flag is None:
+
+            slippery_flag = roof_data.get("Slippery_Surface")
+
         snow_pre_pv = float(roof_data.get('snow_pre_pv', 0))
 
         snow_post_pv = float(roof_data.get('snow_post_pv', 0))
 
-        asce_version = str(roof_data.get('ASCE', data.get('ASCE', ''))).strip()
+        roof_data["_raw_snow_pre_pv"] = snow_pre_pv
+
+        roof_data["_raw_snow_post_pv"] = snow_post_pv
+
+        asce_version = str(roof_data.get('ASCE', top_level.get('ASCE', ''))).strip()
 
         if asce_version == '7-22':
 
             snow_pre_pv *= 0.7
 
             snow_post_pv *= 0.7
+
+        snow_post_pv, snow_pre_pv, slippery_meta = apply_slippery_surface_snow_balance(
+
+            snow_post_pv, snow_pre_pv, slippery_flag
+
+        )
 
         snow_string = [snow_post_pv, snow_pre_pv]
 
@@ -970,6 +1272,18 @@ def process_roofs():
 
         }
 
+        final_result["detdb_flags"] = {
+
+            "slippery_surface": slippery_meta,
+
+            "tji": tji_application,
+
+            "sliding_snow_received": roof_data.get("_sliding_snow_received") or [],
+
+        }
+
+        final_result["seismic"] = calculate_seismic_effects(roof_data, top_level)
+
 
         load_combinations = [
 
@@ -1168,7 +1482,9 @@ def process_roofs():
 
                                       modulus_E, modulus_E_minimum, bending_stress_Fb, shear_stress_Fv,
 
-                                      specific_gravity_G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W)
+                                      specific_gravity_G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W,
+
+                                      capacity_I_in4=cap_I_in4, capacity_S_in3=cap_S_in3)
 
 
         # Ensure 'load_cases' key exists in final_result and print debug information
