@@ -573,6 +573,8 @@ def compute_sliding_snow_p_add(rx, ry, Pf_psf):
 
         "P_add_psf": P_add,
 
+        "strip_horizontal_ft": denom,
+
         "Wx_ft": Wx,
 
         "Wy_ft": Wy,
@@ -584,6 +586,36 @@ def compute_sliding_snow_p_add(rx, ry, Pf_psf):
         "ry_id": ry.get("id", ""),
 
     }
+
+
+def _element_ids_in_horizontal_strip(member_coordinates, strip_horizontal_m):
+
+    """Element ids (1-based) whose midpoint lies within horizontal strip from eave."""
+
+    n_elems = len(member_coordinates) - 1
+
+    ids = []
+
+    for elem_id in range(1, n_elems + 1):
+
+        h0 = float(member_coordinates[elem_id - 1][0])
+
+        h1 = float(member_coordinates[elem_id][0])
+
+        mid = 0.5 * (h0 + h1)
+
+        if mid <= strip_horizontal_m + 1e-9:
+
+            ids.append(elem_id)
+
+    return ids
+
+
+def _intersect_element_ids(left, right):
+
+    right_set = set(right)
+
+    return [x for x in left if x in right_set]
 
 
 def accumulate_sliding_snow_pairs(roofs_list):
@@ -648,9 +680,15 @@ def accumulate_sliding_snow_pairs(roofs_list):
 
         p_add = float(detail["P_add_psf"])
 
-        ry["snow_pre_pv"] = float(ry.get("snow_pre_pv", 0)) + p_add
+        strip_ft = float(detail.get("strip_horizontal_ft", min(float(detail["Wy_ft"]), 15.0)))
 
-        ry["snow_post_pv"] = float(ry.get("snow_post_pv", 0)) + p_add
+        ry["_sliding_snow_surcharge_psf"] = float(ry.get("_sliding_snow_surcharge_psf", 0)) + p_add
+
+        ry["_sliding_snow_strip_horizontal_ft"] = max(
+
+            float(ry.get("_sliding_snow_strip_horizontal_ft", 0)), strip_ft
+
+        )
 
         ry.setdefault("_sliding_snow_received", []).append(detail)
 
@@ -1227,6 +1265,61 @@ def analyze_roof(roof_data, top_level):
                                              direction="element")
 
 
+    sliding_snow_psf = float(roof_data.get("_sliding_snow_surcharge_psf", 0) or 0)
+
+    sliding_strip_ft = float(roof_data.get("_sliding_snow_strip_horizontal_ft", 0) or 0)
+
+    sliding_line_snow = 0.0
+
+    sliding_line_snow_075 = 0.0
+
+    if sliding_snow_psf > 0 and sliding_strip_ft > 0:
+
+        strip_m = sliding_strip_ft * 0.3048
+
+        strip_elem_ids = _element_ids_in_horizontal_strip(member_coordinates, strip_m)
+
+        sliding_line_snow = (
+
+            sliding_snow_psf
+
+            * 47.880258888889
+
+            * member_spacing
+
+            * np.cos(pitch)
+
+            * np.cos(pitch)
+
+        )
+
+        sliding_line_snow_075 = sliding_line_snow * 0.75
+
+        nonpv_strip = _intersect_element_ids(nonPV_elements, strip_elem_ids)
+
+        pv_strip = _intersect_element_ids(PV_elements, strip_elem_ids)
+
+        if nonpv_strip:
+
+            lc_DL_snow_nonPV.q_load(q=-sliding_line_snow, element_id=nonpv_strip, direction="element")
+
+            lc_DL_LL_075_wind_045_snow_075_nonPV.q_load(
+
+                q=-sliding_line_snow_075, element_id=nonpv_strip, direction="element"
+
+            )
+
+        if pv_strip:
+
+            lc_DL_snow_PV.q_load(q=-sliding_line_snow, element_id=pv_strip, direction="element")
+
+            lc_DL_LL_075_wind_045_snow_075_PV.q_load(
+
+                q=-sliding_line_snow_075, element_id=pv_strip, direction="element"
+
+            )
+
+
     lc_DL_06_wind_06_nonPV = LoadCase("DL_06_wind_06_nonPV")
 
     lc_DL_06_wind_06_nonPV.q_load(q=-(nonPV_DL_06 + wind_up), element_id=nonPV_elements, direction="element")
@@ -1262,6 +1355,12 @@ def analyze_roof(roof_data, top_level):
         "tji": tji_application,
 
         "sliding_snow_received": roof_data.get("_sliding_snow_received") or [],
+
+        "sliding_snow_surcharge_psf": sliding_snow_psf,
+
+        "sliding_snow_strip_horizontal_ft": sliding_strip_ft,
+
+        "sliding_snow_applied_on_strip_only": bool(sliding_snow_psf > 0 and sliding_strip_ft > 0),
 
     }
 
