@@ -50,8 +50,16 @@ GRADE = "#2"
 # Cr = 1.15
 
 
+def _lateral_stability_cl_neg(depth, breadth, fb_star, fbe, is_tji=False):
+    if is_tji or depth / breadth <= 5:
+        return 1.0
+    return (1 + (fbe / fb_star)) / 1.9 - (
+        ((1 + (fbe / fb_star)) / 1.9) ** 2 - (fbe / fb_star / 0.95)
+    ) ** 0.5
+
+
 def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin, Fb, Fv, G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W,
-                       capacity_I_in4=None, capacity_S_in3=None):
+                       capacity_I_in4=None, capacity_S_in3=None, is_tji=False):
 
     """
 
@@ -106,6 +114,10 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
         f"Inputs - spans: {spans}, spacing: {spacing}, depth: {depth}, breadth: {breadth}, pitch: {pitch}, overhang: {overhang}, E: {E}, Emin: {Emin}, Fb: {Fb}, Fv: {Fv}, G: {G}")
 
     # Calculate lu as the maximum span length
+
+    if is_tji:
+        CF_B = 1.0
+        Cr = 1.0
 
     CF_Fb = CF_B
 
@@ -188,13 +200,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
     Fb_star_D = Fb * CD_D * CF_Fb * Cr
 
 
-    if depth / breadth <= 5:
-
-        CL_neg_D = 1
-
-    else:
-
-        CL_neg_D = (1 + (FbE / Fb_star_D)) / 1.9 - (((1 + (FbE / Fb_star_D)) / 1.9) ** 2 - (FbE / Fb_star_D / 0.95)) ** 0.5
+    CL_neg_D = _lateral_stability_cl_neg(depth, breadth, Fb_star_D, FbE, is_tji=is_tji)
 
     Fb_prime_neg_D = Fb * CD_D * CL_neg_D * CF_Fb * Cr
 
@@ -208,13 +214,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
     Fb_star_Lr = Fb * CF_Fb * Cr * CD_L
 
 
-    if depth / breadth <= 5:
-
-        CL_neg_Lr = 1
-
-    else:
-
-        CL_neg_Lr = (1 + (FbE / Fb_star_Lr)) / 1.9 - (((1 + (FbE / Fb_star_Lr)) / 1.9) ** 2 - (FbE / Fb_star_Lr / 0.95)) ** 0.5
+    CL_neg_Lr = _lateral_stability_cl_neg(depth, breadth, Fb_star_Lr, FbE, is_tji=is_tji)
 
     Fb_prime_neg_Lr = Fb * CL_neg_Lr * CF_Fb * Cr * CD_L
 
@@ -228,13 +228,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
     Fb_star_S = Fb * CF_Fb * Cr * CD_S
 
 
-    if depth / breadth <= 5:
-
-        CL_neg_S = 1
-
-    else:
-
-        CL_neg_S = (1 + (FbE / Fb_star_S)) / 1.9 - (((1 + (FbE / Fb_star_S)) / 1.9) ** 2 - (FbE / Fb_star_S / 0.95)) ** 0.5
+    CL_neg_S = _lateral_stability_cl_neg(depth, breadth, Fb_star_S, FbE, is_tji=is_tji)
 
     Fb_prime_neg_S = Fb * CL_neg_S * CF_Fb * Cr * CD_S
 
@@ -248,13 +242,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
     Fb_star_W = Fb * CF_Fb * Cr * CD_W
 
 
-    if depth / breadth <= 5:
-
-        CL_neg_W = 1
-
-    else:
-
-        CL_neg_W = (1 + (FbE / Fb_star_W)) / 1.9 - (((1 + (FbE / Fb_star_W)) / 1.9) ** 2 - (FbE / Fb_star_W / 0.95)) ** 0.5
+    CL_neg_W = _lateral_stability_cl_neg(depth, breadth, Fb_star_W, FbE, is_tji=is_tji)
 
     Fb_prime_neg_W = Fb * CL_neg_W * CF_Fb * Cr * CD_W
 
@@ -849,6 +837,18 @@ def analyze_roof(roof_data, top_level):
     else:
 
         Cr = 1.0
+
+    is_tji_member = str(member_type).strip().upper() == "TJI"
+
+    if is_tji_member:
+
+        CF_B = 1.0
+
+        Cr = 1.0
+
+        tji_application.setdefault("capacity_factors", {})
+
+        tji_application["capacity_factors"].update({"CL_neg": 1.0, "Cr": 1.0, "CF_B": 1.0})
 
 
     # print(f"racking: {racking}")
@@ -1467,7 +1467,7 @@ def analyze_roof(roof_data, top_level):
 
                                   specific_gravity_G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W,
 
-                                  capacity_I_in4=cap_I_in4, capacity_S_in3=cap_S_in3)
+                                  capacity_I_in4=cap_I_in4, capacity_S_in3=cap_S_in3, is_tji=is_tji_member)
 
 
     # Ensure 'load_cases' key exists in final_result and print debug information
