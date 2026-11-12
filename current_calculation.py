@@ -50,8 +50,9 @@ GRADE = "#2"
 # Cr = 1.15
 
 
-def _lateral_stability_cl_neg(depth, breadth, fb_star, fbe, is_tji=False):
-    if is_tji or depth / breadth <= 5:
+def _lateral_stability_cl_neg(depth, breadth, fb_star, fbe, is_tji=False, braced=False):
+    # braced: vaulted rafters have the ceiling on the compression (bottom) edge, so no CL reduction.
+    if is_tji or braced or depth / breadth <= 5:
         return 1.0
     return (1 + (fbe / fb_star)) / 1.9 - (
         ((1 + (fbe / fb_star)) / 1.9) ** 2 - (fbe / fb_star / 0.95)
@@ -59,7 +60,7 @@ def _lateral_stability_cl_neg(depth, breadth, fb_star, fbe, is_tji=False):
 
 
 def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin, Fb, Fv, G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W,
-                       capacity_I_in4=None, capacity_S_in3=None, is_tji=False):
+                       capacity_I_in4=None, capacity_S_in3=None, is_tji=False, vaulted=False):
 
     """
 
@@ -125,7 +126,14 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
 
     CF_Fc = CF_C
 
-    lu = max(spans) * 12
+    # spans = [spanOH, span1, span2, span3]: lu is the longest clear span, and a non-zero spanOH counts as an overhang.
+    span_values = [float(s) for s in spans]
+    if len(span_values) >= 4 and max(span_values[1:4]) > 0:
+        lu = max(span_values[1:4]) * 12
+        has_overhang = float(overhang or 0) != 0 or span_values[0] != 0
+    else:
+        lu = max(span_values) * 12
+        has_overhang = float(overhang or 0) != 0
 
     print(f"lu (max span length in inches): {lu}")
 
@@ -139,7 +147,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
 
     # Compute le based on the provided formula
 
-    if overhang != 0:
+    if has_overhang:
 
         if lu_d < 7:
 
@@ -200,7 +208,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
     Fb_star_D = Fb * CD_D * CF_Fb * Cr
 
 
-    CL_neg_D = _lateral_stability_cl_neg(depth, breadth, Fb_star_D, FbE, is_tji=is_tji)
+    CL_neg_D = _lateral_stability_cl_neg(depth, breadth, Fb_star_D, FbE, is_tji=is_tji, braced=vaulted)
 
     Fb_prime_neg_D = Fb * CD_D * CL_neg_D * CF_Fb * Cr
 
@@ -214,7 +222,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
     Fb_star_Lr = Fb * CF_Fb * Cr * CD_L
 
 
-    CL_neg_Lr = _lateral_stability_cl_neg(depth, breadth, Fb_star_Lr, FbE, is_tji=is_tji)
+    CL_neg_Lr = _lateral_stability_cl_neg(depth, breadth, Fb_star_Lr, FbE, is_tji=is_tji, braced=vaulted)
 
     Fb_prime_neg_Lr = Fb * CL_neg_Lr * CF_Fb * Cr * CD_L
 
@@ -228,7 +236,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
     Fb_star_S = Fb * CF_Fb * Cr * CD_S
 
 
-    CL_neg_S = _lateral_stability_cl_neg(depth, breadth, Fb_star_S, FbE, is_tji=is_tji)
+    CL_neg_S = _lateral_stability_cl_neg(depth, breadth, Fb_star_S, FbE, is_tji=is_tji, braced=vaulted)
 
     Fb_prime_neg_S = Fb * CL_neg_S * CF_Fb * Cr * CD_S
 
@@ -242,7 +250,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
     Fb_star_W = Fb * CF_Fb * Cr * CD_W
 
 
-    CL_neg_W = _lateral_stability_cl_neg(depth, breadth, Fb_star_W, FbE, is_tji=is_tji)
+    CL_neg_W = _lateral_stability_cl_neg(depth, breadth, Fb_star_W, FbE, is_tji=is_tji, braced=vaulted)
 
     Fb_prime_neg_W = Fb * CL_neg_W * CF_Fb * Cr * CD_W
 
@@ -891,7 +899,9 @@ def analyze_roof(roof_data, top_level):
 
     asce_version = str(roof_data.get('ASCE', top_level.get('ASCE', ''))).strip()
 
-    if asce_version == '7-22':
+    # The lambda sends I/O-sheet snow that already includes the 7-22 factor (snow_includes_asce_factor).
+    snow_already_adjusted = str(roof_data.get('snow_includes_asce_factor', '')).strip().lower() in ('true', '1', 'yes')
+    if asce_version == '7-22' and not snow_already_adjusted:
 
         snow_pre_pv *= 0.7
 
@@ -1656,7 +1666,8 @@ def analyze_roof(roof_data, top_level):
 
                                   specific_gravity_G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W,
 
-                                  capacity_I_in4=cap_I_in4, capacity_S_in3=cap_S_in3, is_tji=is_tji_member)
+                                  capacity_I_in4=cap_I_in4, capacity_S_in3=cap_S_in3, is_tji=is_tji_member,
+                                  vaulted=str(roof_data.get('vaulted', '')).strip().lower() in ('true', '1', 'yes'))
 
 
     # Ensure 'load_cases' key exists in final_result and print debug information

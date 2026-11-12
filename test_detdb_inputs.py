@@ -51,6 +51,25 @@ class TestSlidingSnowLoad(unittest.TestCase):
         self.assertGreater(slid["Max_DCR_D_S"], base["Max_DCR_D_S"])
 
 
+class TestSnowAsceFactor(unittest.TestCase):
+    def test_pre_adjusted_snow_not_reduced_again(self):
+        plain = analyze_roof(_roof(ASCE="7-16"), {})
+        flagged = analyze_roof(_roof(ASCE="7-22", snow_includes_asce_factor=True), {})
+        reduced = analyze_roof(_roof(ASCE="7-22", CF_C=1.1), {})
+        self.assertEqual(flagged["load_cases"]["D + S"], plain["load_cases"]["D + S"])
+        self.assertLess(reduced["load_cases"]["D + S"]["Max Moment (+)"], plain["load_cases"]["D + S"]["Max Moment (+)"])
+
+
+class TestVaultedBracing(unittest.TestCase):
+    def test_vaulted_raises_negative_moment_capacity_only(self):
+        roof = dict(framing_breadth=1.5, framing_depth=9.25, span_locations=[1.33, 24.08, 0, 0],
+                    mod_locations=[0.75, 14.67], etor=25.8, pitch=2, wind_pressure_up=-60)
+        open_ = analyze_roof(_roof(**roof), {})
+        vaulted = analyze_roof(_roof(vaulted=True, **roof), {})
+        self.assertLess(vaulted["Max_DCR_0.6D_0.6W_Up"], open_["Max_DCR_0.6D_0.6W_Up"])
+        self.assertAlmostEqual(vaulted["Max_DCR_D_S"], open_["Max_DCR_D_S"], places=6)
+
+
 class TestPurlinSpanLocations(unittest.TestCase):
     def test_explicit_span_locations_used_as_is(self):
         cfg = purlin_configuration({
