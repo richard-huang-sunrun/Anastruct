@@ -436,6 +436,64 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
 
 
 
+def build_stations(spans_ft, mods_ft, ndigits=6):
+
+    """Unique, sorted beam stations (ft) plus the support and module stations on them.
+
+    Positions are rounded so a module edge that lands on a support (or trailing zero
+    spans) shares one station instead of creating a near-zero-length element.
+    """
+
+    supports = []
+
+    total = 0.0
+
+    for s in spans_ft:
+
+        total += float(s)
+
+        supports.append(round(total, ndigits))
+
+    mods = sorted(round(float(m), ndigits) for m in mods_ft)
+
+    stations = sorted({0.0, *supports, *mods})
+
+    return stations, sorted(set(supports)), mods
+
+
+def station_node_id(stations, x):
+
+    """Node id of station x: the origin is node 1 and each station gap has a midpoint node."""
+
+    return 2 * stations.index(x) + 1
+
+
+def default_roofing_dead_load(roof_type, roof_weight=0):
+
+    """Roofing dead load (psf): roof weight when given, else by roof type."""
+
+    try:
+
+        roof_weight = float(roof_weight or 0)
+
+    except (TypeError, ValueError):
+
+        roof_weight = 0.0
+
+    if roof_weight != 0:
+
+        return roof_weight
+
+    return {"shingle": 10.0, "tile": 14.0, "metal": 9.0}.get(str(roof_type).strip().lower(), 10.0)
+
+
+def default_pv_dead_load(racking):
+
+    """PV dead load (psf) added on top of roofing: tilt kit 4, flush mount / other 3."""
+
+    return 4.0 if str(racking).strip().upper() == "TK" else 3.0
+
+
 def _truthy_slippery(val):
 
     """Parse DETDB slippery surface: Yes/True/1 -> True, No/False/0 -> False."""
@@ -827,9 +885,21 @@ def analyze_roof(roof_data, top_level):
 
     overhang = float(roof_data.get('overhang', 0))
 
-    dead_load_roofing = float(roof_data.get('dead_load_roofing', 10))
+    dead_load_roofing = roof_data.get('dead_load_roofing')
 
-    dead_load_pv = float(roof_data.get('dead_load_pv', 3))
+    if dead_load_roofing is None or str(dead_load_roofing).strip() == '':
+
+        dead_load_roofing = default_roofing_dead_load(roof_type, roof_data.get('roofweight', 0))
+
+    dead_load_roofing = float(dead_load_roofing)
+
+    dead_load_pv = roof_data.get('dead_load_pv')
+
+    if dead_load_pv is None or str(dead_load_pv).strip() == '':
+
+        dead_load_pv = default_pv_dead_load(racking)
+
+    dead_load_pv = float(dead_load_pv)
 
     live_load_post_pv = float(roof_data.get('live_load_post_pv', 0))
 
@@ -957,16 +1027,6 @@ def analyze_roof(roof_data, top_level):
 
     # Convert units
 
-    for i in range(len(mod_locations)):
-
-        mod_locations[i] = float(mod_locations[i]) * 0.3048
-
-    mod_locations.sort()
-
-    for i in range(len(spans)):
-
-        spans[i] = float(spans[i]) * 0.3048
-
     eave_to_ridge *= 0.3048
 
     member_spacing = (member_spacing / 12) * 0.3048
@@ -988,48 +1048,16 @@ def analyze_roof(roof_data, top_level):
     print(wind_up)
 
 
-    support_locations = []
+    stations, support_stations, mod_stations = build_stations(spans, mod_locations)
 
-    for i in range(len(spans)):
+    # Split each station gap in half for a more accurate deflection value.
+    rafter_array = [stations[0]]
 
-        if i == 0:
+    for a, b in zip(stations, stations[1:]):
 
-            support_locations.append(spans[i])
+        rafter_array.extend([(a + b) / 2, b])
 
-        else:
-
-            support_locations.append(spans[i] + support_locations[i - 1])
-
-
-    rafter_array = support_locations + mod_locations
-
-    rafter_array.sort()
-
-
-    final_node_count = len(rafter_array) + (len(rafter_array) - 1)
-
-    for i in range(len(rafter_array) - 1):
-
-        rafter_array.insert(i + (i + 1), (rafter_array[i + i] + rafter_array[i + i + 1]) / 2)
-
-
-    tmp_member_coordinates = [[i * np.cos(pitch), i * np.sin(pitch)] for i in rafter_array]
-
-    support_coordinates = [[i * np.cos(pitch), i * np.sin(pitch)] for i in support_locations]
-
-    mod_coordinates = [[i * np.cos(pitch), i * np.sin(pitch)] for i in mod_locations]
-
-
-    tmp_member_coordinates.insert(0, [0, 0])
-
-
-    member_coordinates = []
-
-    for i in tmp_member_coordinates:
-
-        if i not in member_coordinates:
-
-            member_coordinates.append(i)
+    member_coordinates = [[x * 0.3048 * np.cos(pitch), x * 0.3048 * np.sin(pitch)] for x in rafter_array]
 
 
     E = float(list_EAI[0]) * 6894.7572931783
@@ -1046,11 +1074,23 @@ def analyze_roof(roof_data, top_level):
         ss.add_element(location=[member_coordinates[i], member_coordinates[i + 1]])
 
 
-    for i in support_coordinates:
+    is_truss = str(member_type).strip().lower() == "truss"
 
-        support_node_id = ss.find_node_id(i)
+    support_node_ids = []
 
-        ss.add_support_hinged(node_id=support_node_id)
+    for x in support_stations:
+
+        support_node_id = station_node_id(stations, x)
+
+        if is_truss:
+
+            ss.add_support_fixed(node_id=support_node_id)
+
+        else:
+
+            ss.add_support_hinged(node_id=support_node_id)
+
+        support_node_ids.append(support_node_id)
 
 
     PV_start = []
@@ -1059,9 +1099,9 @@ def analyze_roof(roof_data, top_level):
 
     ndx = 0
 
-    for i in mod_coordinates:
+    for x in mod_stations:
 
-        mod_node_id = ss.find_node_id(i)
+        mod_node_id = station_node_id(stations, x)
 
         if (ndx % 2) == 0:
 
@@ -1386,16 +1426,7 @@ def analyze_roof(roof_data, top_level):
     ]
 
 
-    support_node_ids = []
-
-
-    for i in support_coordinates:
-
-        support_node_id = ss.find_node_id(i)
-
-        ss.add_support_hinged(node_id=support_node_id)
-
-        support_node_ids.append(support_node_id)  # Track the support node IDs
+    first_support = support_node_ids[0]
 
 
     for load_combination, load_cases in load_combinations:
@@ -1454,60 +1485,54 @@ def analyze_roof(roof_data, top_level):
                 max_displacement = tmp_w
 
 
-        rxn_forces = []
+        # Shear at the start of each element (V+), with 0 at the free end so it lines up
+        # with the node list; V- at each node is V+ minus that node's vertical reaction.
+        positive_shear_array = [el.shear_force[0] for el in ss.element_map.values()]
 
-        for node_id in support_node_ids:
+        positive_shear_array.append(0)
 
-            node_results = ss.get_node_results_system(node_id=node_id)
+        rxn_array = [node["Fy"] / np.cos(pitch) for node in ss.get_node_results_system(node_id=0)]
 
-
-            if load_combination == "0.6D + 0.6W (Up)":
-
-                rxn_forces.append(node_results['Fy'] / np.cos(pitch))
-
-            else:
-
-                rxn_forces.append(node_results['Fx'] / np.cos(pitch))
-
-
-        shear_results = ss.get_element_result_range("shear")
-
-        positive_shear_array = [data for data in shear_results]
-
-
-        # rxn_array = []
-
-        # print(data)
-
-        # for data in rxn_forces:
-
-        #     # Use the correct key to access the vertical force (Fy)
-
-        #     rxn_array.append(data['Fy'] / np.cos(pitch))
-
-
-        print(f"Length of positive_shear_array: {len(positive_shear_array)}")
-
-        print(f"Length of rxn_forces: {len(rxn_forces)}")
-
-
-        # Ensure the loop only runs for the minimum length of the two arrays
-
-        min_length = min(len(positive_shear_array), len(rxn_forces))
-
-        print(f"Using min_length: {min_length}")
-
-
-        negative_shear_array = []
-
-        for i in range(min_length):
-
-            negative_shear_array.append(positive_shear_array[i] - rxn_forces[i])
+        negative_shear_array = [v - r for v, r in zip(positive_shear_array, rxn_array)]
 
         total_shear = positive_shear_array + negative_shear_array
 
         max_shear = max(map(abs, total_shear))
 
+
+        displacement_array = ss.get_node_displacements()
+
+        for node in displacement_array:
+
+            tmp_w = abs(node["uy"]) / np.cos(pitch)
+
+            if tmp_w > max_displacement:
+
+                max_displacement = tmp_w
+
+
+        # Overhang = elements and nodes ahead of the first support.
+        max_overhang_displacement = 0
+
+        for oHang_element in range(1, first_support):
+
+            ohang_result = ss.get_element_results(element_id=oHang_element, verbose=True)
+
+            tmp_ohang_max = np.max(np.abs(ohang_result["w"])) / np.cos(pitch)
+
+            if tmp_ohang_max > max_overhang_displacement:
+
+                max_overhang_displacement = tmp_ohang_max
+
+        for node in displacement_array:
+
+            if node["id"] < first_support:
+
+                tmp_ohang_max = abs(node["uy"]) / np.cos(pitch)
+
+                if tmp_ohang_max > max_overhang_displacement:
+
+                    max_overhang_displacement = tmp_ohang_max
 
 
         max_moment_positive = -np.ceil(max_moment_positive * 0.737562149)
@@ -1520,6 +1545,8 @@ def analyze_roof(roof_data, top_level):
 
         max_displacement = max_displacement * 39.3700787
 
+        max_overhang_displacement = max_overhang_displacement * 39.3700787
+
 
         final_result["load_cases"][load_combination] = {
 
@@ -1531,7 +1558,9 @@ def analyze_roof(roof_data, top_level):
 
             "Max Axial Compression (lb)": max_axial,
 
-            "Max Displacement (in)": max_displacement
+            "Max Displacement (in)": max_displacement,
+
+            "Max Overhang Displacement (in)": max_overhang_displacement
 
         }
 
