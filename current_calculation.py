@@ -1436,7 +1436,36 @@ def analyze_roof(roof_data, top_level):
             ss.apply_load_case(lc)
 
 
-        ss.solve()
+        try:
+
+            ss.solve()
+
+        except AssertionError as exc:
+
+            # A combination can carry no load at all (e.g. 0 psf PV dead load on a member fully
+            # covered by modules); anastruct refuses to solve that, but the demands are simply zero.
+
+            if "no forces" not in str(exc):
+
+                raise
+
+            final_result["load_cases"][load_combination] = {
+
+                "Max Moment (+)": 0.0,
+
+                "Max Moment (-)": 0.0,
+
+                "Max Shear (lb)": 0.0,
+
+                "Max Axial Compression (lb)": 0.0,
+
+                "Max Displacement (in)": 0.0,
+
+                "Max Overhang Displacement (in)": 0.0
+
+            }
+
+            continue
 
         max_moment_positive = 0
 
