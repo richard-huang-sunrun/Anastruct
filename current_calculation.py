@@ -750,6 +750,30 @@ def accumulate_sliding_snow_pairs(roofs_list):
 
         ry.setdefault("_sliding_snow_received", []).append(detail)
 
+    # Receiving-roof form (DETDB slidingSnow names the source roof, which may be inactive and absent from the payload).
+    for ry in roofs_list:
+        src = ry.get("sliding_snow_from")
+        if not isinstance(src, dict):
+            continue
+        rx = {"sliding_snow": "Yes", "id": src.get("id", ""), "etor": src.get("etor", 0), "pitch": src.get("pitch", 0)}
+        if rx["id"] and any(d.get("rx_id") == rx["id"] for d in ry.get("_sliding_snow_received", [])):
+            continue
+        try:
+            Pf = max(
+                float(src.get("snow_pre_pv", ry.get("snow_pre_pv", 0)) or 0),
+                float(src.get("snow_post_pv", ry.get("snow_post_pv", 0)) or 0),
+            )
+        except (TypeError, ValueError):
+            continue
+        detail = compute_sliding_snow_p_add(rx, ry, Pf)
+        if not detail:
+            continue
+        ry["_sliding_snow_surcharge_psf"] = float(ry.get("_sliding_snow_surcharge_psf", 0)) + float(detail["P_add_psf"])
+        ry["_sliding_snow_strip_horizontal_ft"] = max(
+            float(ry.get("_sliding_snow_strip_horizontal_ft", 0)), float(detail["strip_horizontal_ft"])
+        )
+        ry.setdefault("_sliding_snow_received", []).append(detail)
+
 
 def analyze_roof(roof_data, top_level):
 
@@ -946,7 +970,14 @@ def analyze_roof(roof_data, top_level):
 
         Cr = 1.0
 
-    is_tji_member = str(member_type).strip().upper() == "TJI"
+    is_tji_member = str(member_type).strip().upper() == "TJI" and bool(tji_patch)
+
+    if str(member_type).strip().upper() == "TJI" and not tji_patch:
+        tji_application = {
+            "tji_model": roof_data.get("tji_model") or roof_data.get("TJI_model"),
+            "tji_depth": roof_data.get("tji_depth") or roof_data.get("TJI_depth"),
+            "error": "TJI model/depth not in TJI table; analysed with the rafter section inputs.",
+        }
 
     if is_tji_member:
 
@@ -1339,23 +1370,24 @@ def analyze_roof(roof_data, top_level):
 
         pv_strip = _intersect_element_ids(PV_elements, strip_elem_ids)
 
+        # anastruct q_load replaces (not adds to) an element's distributed load, so strip elements get the full total.
         if nonpv_strip:
 
-            lc_DL_snow_nonPV.q_load(q=-sliding_line_snow, element_id=nonpv_strip, direction="element")
+            lc_DL_snow_nonPV.q_load(q=-(nonPV_DL + nonPV_snow + sliding_line_snow), element_id=nonpv_strip, direction="element")
 
             lc_DL_LL_075_wind_045_snow_075_nonPV.q_load(
 
-                q=-sliding_line_snow_075, element_id=nonpv_strip, direction="element"
+                q=-(nonPV_DL + wind_045 + nonPV_snow_075 + sliding_line_snow_075), element_id=nonpv_strip, direction="element"
 
             )
 
         if pv_strip:
 
-            lc_DL_snow_PV.q_load(q=-sliding_line_snow, element_id=pv_strip, direction="element")
+            lc_DL_snow_PV.q_load(q=-(PV_DL + PV_snow + sliding_line_snow), element_id=pv_strip, direction="element")
 
             lc_DL_LL_075_wind_045_snow_075_PV.q_load(
 
-                q=-sliding_line_snow_075, element_id=pv_strip, direction="element"
+                q=-(PV_DL + wind_045 + PV_snow_075 + sliding_line_snow_075), element_id=pv_strip, direction="element"
 
             )
 

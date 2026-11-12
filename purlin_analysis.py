@@ -107,6 +107,11 @@ def purlin_configuration(roof_data: dict) -> Dict[str, Any]:
     span1 = parse_length_ft(_first(roof_data, "purlin_span_1", "purlinSpan1", "purlin_span1"))
     span2 = parse_length_ft(_first(roof_data, "purlin_span_2", "purlinSpan2", "purlin_span2"))
     spans_ft = [span1, span2, 0.0, 0.0]
+    # Same layout as the rafter span_locations: [overhang, span1, span2, span3].
+    explicit = _first(roof_data, "purlin_span_locations", "purlinSpanLocations")
+    explicit = isinstance(explicit, (list, tuple)) and len(explicit) > 0 and explicit
+    if explicit:
+        spans_ft = ([parse_length_ft(s) for s in explicit] + [0.0, 0.0, 0.0, 0.0])[:4]
 
     has_size = breadth is not None and depth is not None
     axis_label = ""
@@ -124,7 +129,7 @@ def purlin_configuration(roof_data: dict) -> Dict[str, Any]:
             axis_label = "Strong"
 
     configured = attach and spacing is not None and has_size and has_axis
-    has_spans = (span1 > 0 or span2 > 0)
+    has_spans = any(s > 0 for s in spans_ft[1:]) if explicit else (span1 > 0 or span2 > 0)
 
     return {
         "attach_to_purlins": attach,

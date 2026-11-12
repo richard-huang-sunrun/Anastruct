@@ -9,7 +9,6 @@ Not wired into the FEA line model unless loads are applied explicitly later.
 
 from __future__ import annotations
 
-import math
 from typing import Any, Mapping
 
 
@@ -65,7 +64,7 @@ def calculate_seismic_effects(
 
     roof_area_sf = _f(roof_data, "roof_area_sf", "footprint_area_sf", default=0.0)
 
-    equiv_base_shear_lb = kh * Ie * dead_total_psf * roof_area_sf if roof_area_sf > 0 else math.nan
+    equiv_base_shear_lb = kh * Ie * dead_total_psf * roof_area_sf if roof_area_sf > 0 else None
 
     return {
         "Ss": Ss,
