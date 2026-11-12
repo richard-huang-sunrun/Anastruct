@@ -50,6 +50,20 @@ GRADE = "#2"
 # Cr = 1.15
 
 
+def nds_size_factors(breadth, depth):
+    # NDS Supplement Table 4A size factors (Fb, Ft, Fc) by actual dressed or rough-sawn dimensions.
+    # Timbers (5x5 and larger) use (12/d)^(1/9) for Fb when d > 12 in, otherwise 1.0, and 1.0 for Ft and Fc.
+    if breadth >= 5 and depth >= 5:
+        return ((12 / depth) ** (1 / 9) if depth > 12 else 1.0), 1.0, 1.0
+    for limit, ft, fc in ((4, 1.5, 1.15), (5, 1.4, 1.1), (6, 1.3, 1.1), (8, 1.2, 1.05), (10, 1.1, 1.0), (12, 1.0, 1.0)):
+        if depth <= limit:
+            break
+    else:
+        ft, fc = 0.9, 0.9
+    fb = ft + 0.1 if breadth > 3 and depth > 6 else ft
+    return fb, ft, fc
+
+
 def _lateral_stability_cl_neg(depth, breadth, fb_star, fbe, is_tji=False, braced=False):
     # braced: vaulted rafters have the ceiling on the compression (bottom) edge, so no CL reduction.
     if is_tji or braced or depth / breadth <= 5:
@@ -60,7 +74,7 @@ def _lateral_stability_cl_neg(depth, breadth, fb_star, fbe, is_tji=False, braced
 
 
 def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin, Fb, Fv, G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W,
-                       capacity_I_in4=None, capacity_S_in3=None, is_tji=False, vaulted=False):
+                       capacity_I_in4=None, capacity_S_in3=None, CF_T=None, is_tji=False, vaulted=False):
 
     """
 
@@ -122,7 +136,7 @@ def calculate_capacity(spans, spacing, depth, breadth, pitch, overhang, E, Emin,
 
     CF_Fb = CF_B
 
-    CF_Ft = CF_B
+    CF_Ft = CF_B if CF_T is None else CF_T
 
     CF_Fc = CF_C
 
@@ -953,23 +967,17 @@ def analyze_roof(roof_data, top_level):
     CD_W = float(roof_data.get('CD_W', 1.6))
 
 
-    CF_B = float(roof_data.get('CF_B', 1.3))  # Default value of 1.3 if not provided
+    default_CF_B, default_CF_T, default_CF_C = nds_size_factors(framing_breadth, framing_depth)
 
-    CF_T = float(roof_data.get('CF_T', 1.3))  # Default value of 1.3 if not provided
+    def _factor(key, default):
+        raw = roof_data.get(key)
+        return float(raw) if raw is not None and str(raw).strip() != '' else default
 
-    cf_c_raw = roof_data.get('CF_C')
+    CF_B = _factor('CF_B', default_CF_B)
 
-    if cf_c_raw is not None and str(cf_c_raw).strip() != '':
+    CF_T = _factor('CF_T', default_CF_T)
 
-        CF_C = float(cf_c_raw)
-
-    elif asce_version == '7-22':
-
-        CF_C = 1.2
-
-    else:
-
-        CF_C = 1.1
+    CF_C = _factor('CF_C', default_CF_C)
 
 
     if member_spacing <= 24:
@@ -1666,7 +1674,7 @@ def analyze_roof(roof_data, top_level):
 
                                   specific_gravity_G, CF_B, CF_C, Cr, CD_D, CD_L, CD_S, CD_W,
 
-                                  capacity_I_in4=cap_I_in4, capacity_S_in3=cap_S_in3, is_tji=is_tji_member,
+                                  capacity_I_in4=cap_I_in4, capacity_S_in3=cap_S_in3, CF_T=CF_T, is_tji=is_tji_member,
                                   vaulted=str(roof_data.get('vaulted', '')).strip().lower() in ('true', '1', 'yes'))
 
 
