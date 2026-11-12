@@ -50,6 +50,69 @@ GRADE = "#2"
 # Cr = 1.15
 
 
+# NDS Supplement Table 4A reference design values for visually graded dimension lumber: (Fb, E, Emin, Fv, G).
+SAWN_LUMBER_VALUES = {
+    "DFL": {"SS": (1500, 1900000, 690000, 180, 0.5), "1&BTR": (1200, 1800000, 660000, 180, 0.5),
+            "CONSTRUCTION": (1000, 1500000, 550000, 180, 0.5), "#1": (1000, 1700000, 620000, 180, 0.5),
+            "#2": (900, 1600000, 580000, 180, 0.5), "STUD": (700, 1400000, 510000, 180, 0.5),
+            "STANDARD": (575, 1400000, 510000, 180, 0.5), "#3": (525, 1400000, 510000, 180, 0.5)},
+    "SPF": {"SS": (1250, 1500000, 550000, 135, 0.42), "1&BTR": (875, 1400000, 510000, 135, 0.42),
+            "CONSTRUCTION": (1000, 1300000, 470000, 135, 0.42), "#1": (875, 1400000, 510000, 135, 0.42),
+            "#2": (875, 1400000, 510000, 135, 0.42), "STUD": (675, 1200000, 440000, 135, 0.42),
+            "STANDARD": (550, 1200000, 440000, 135, 0.42), "#3": (500, 1200000, 440000, 135, 0.42)},
+    "HF": {"SS": (1400, 1600000, 580000, 150, 0.43), "1&BTR": (1100, 1500000, 550000, 150, 0.43),
+           "CONSTRUCTION": (975, 1300000, 470000, 150, 0.43), "#1": (975, 1500000, 550000, 150, 0.43),
+           "#2": (850, 1300000, 470000, 150, 0.43), "STUD": (675, 1200000, 440000, 150, 0.43),
+           "STANDARD": (550, 1200000, 440000, 150, 0.43), "#3": (500, 1200000, 440000, 150, 0.43)},
+    "RW": {"SS": (1350, 1400000, 510000, 160, 0.44), "1&BTR": (975, 1300000, 470000, 160, 0.44),
+           "CONSTRUCTION": (825, 900000, 330000, 160, 0.44), "#1": (975, 1300000, 470000, 160, 0.44),
+           "#2": (925, 1200000, 440000, 160, 0.44), "STUD": (575, 900000, 330000, 160, 0.44),
+           "STANDARD": (450, 900000, 330000, 160, 0.44), "#3": (525, 1100000, 400000, 160, 0.44)},
+    "SP": {"SS": (2350, 1800000, 660000, 175, 0.55), "1&BTR": (1500, 1600000, 580000, 175, 0.55),
+           "CONSTRUCTION": (875, 1400000, 510000, 175, 0.55), "#1": (1500, 1600000, 580000, 175, 0.55),
+           "#2": (1100, 1400000, 510000, 175, 0.55), "STUD": (650, 1300000, 470000, 175, 0.55),
+           "STANDARD": (475, 1200000, 440000, 175, 0.55), "#3": (650, 1300000, 470000, 175, 0.55)},
+    "MSR": {"SS": (1250, 1400000, 510000, 135, 0.42), "1&BTR": (875, 1300000, 470000, 135, 0.42),
+            "CONSTRUCTION": (580, 900000, 330000, 135, 0.42), "#1": (875, 1300000, 470000, 135, 0.42),
+            "#2": (730, 1200000, 440000, 135, 0.42), "STUD": (315, 900000, 330000, 135, 0.42),
+            "STANDARD": (315, 900000, 330000, 135, 0.42), "#3": (430, 1100000, 400000, 135, 0.42)},
+}
+
+_SPECIES_ALIASES = {
+    "DFL": "DFL", "DF": "DFL", "DF-L": "DFL", "DOUGFIR": "DFL", "DOUGFIRLARCH": "DFL", "DOUGLASFIR": "DFL",
+    "DOUGLASFIRLARCH": "DFL", "SPF": "SPF", "SPRUCEPINEFIR": "SPF", "HF": "HF", "HEMFIR": "HF",
+    "RW": "RW", "REDWOOD": "RW", "SP": "SP", "SYP": "SP", "SOUTHERNPINE": "SP", "SOUTHERNYELLOWPINE": "SP",
+    "MSR": "MSR",
+}
+
+_GRADE_ALIASES = {
+    "SS": "SS", "SELECTSTRUCTURAL": "SS", "1&BTR": "1&BTR", "1BTR": "1&BTR", "NO1&BTR": "1&BTR",
+    "NO1&BETTER": "1&BTR", "1&BETTER": "1&BTR", "CONSTRUCTION": "CONSTRUCTION", "CONST": "CONSTRUCTION",
+    "#1": "#1", "1": "#1", "NO1": "#1", "#2": "#2", "2": "#2", "NO2": "#2", "STUD": "STUD",
+    "STANDARD": "STANDARD", "STD": "STANDARD", "#3": "#3", "3": "#3", "NO3": "#3",
+}
+
+
+def _alias_key(value):
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum() or ch in "#&").replace("NO.", "NO")
+
+
+def normalize_species(value):
+    return _SPECIES_ALIASES.get(_alias_key(value))
+
+
+def normalize_grade(value):
+    return _GRADE_ALIASES.get(_alias_key(value))
+
+
+def sawn_lumber_values(species, grade):
+    """(species, grade, (Fb, E, Emin, Fv, G)) for a recognised species/grade pair, else None."""
+    sp, gr = normalize_species(species), normalize_grade(grade)
+    if sp and gr:
+        return sp, gr, SAWN_LUMBER_VALUES[sp][gr]
+    return None
+
+
 def nds_size_factors(breadth, depth):
     # NDS Supplement Table 4A size factors (Fb, Ft, Fc) by actual dressed or rough-sawn dimensions.
     # Timbers (5x5 and larger) use (12/d)^(1/9) for Fb when d > 12 in, otherwise 1.0, and 1.0 for Ft and Fc.
@@ -841,6 +904,19 @@ def analyze_roof(roof_data, top_level):
 
     bending_stress_Fb = float(roof_data.get('bending_stress_Fb', 900))
 
+    raw_species = roof_data.get('framing_species') or roof_data.get('framingSpecies')
+    raw_grade = roof_data.get('framing_grade') or roof_data.get('framingGrade')
+    lumber = sawn_lumber_values(raw_species, raw_grade)
+    if lumber:
+        bending_stress_Fb, modulus_E, modulus_E_minimum, shear_stress_Fv, specific_gravity_G = map(float, lumber[2])
+        list_EAI = [modulus_E, member_A, member_I]
+    material = {
+        "species": lumber[0] if lumber else raw_species,
+        "grade": lumber[1] if lumber else raw_grade,
+        "values_from": "species/grade table" if lumber else "payload values",
+        "selection": roof_data.get('material_source'),
+    }
+
     framing_breadth = float(roof_data.get('framing_breadth', 1.5))
 
     framing_depth = float(roof_data.get('framing_depth', 3.5))
@@ -1453,6 +1529,10 @@ def analyze_roof(roof_data, top_level):
         "sliding_snow_applied_on_strip_only": bool(sliding_snow_psf > 0 and sliding_strip_ft > 0),
 
     }
+
+    material.update(Fb=bending_stress_Fb, E=modulus_E, Emin=modulus_E_minimum, Fv=shear_stress_Fv,
+                    G=specific_gravity_G, tji=bool(tji_patch))
+    final_result["material"] = material
 
     final_result["seismic"] = calculate_seismic_effects(roof_data, top_level)
 
